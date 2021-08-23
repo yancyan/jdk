@@ -139,6 +139,14 @@ import jdk.internal.HotSpotIntrinsicCandidate;
  * @see     #stop()
  * @since   1.0
  */
+
+/**
+ * 线程中断状态自动感知：
+ * 来自 Object 类的 wait()、wait(long)、wait(long, int)，
+ * 来自 Thread 类的 join()、join(long)、join(long, int)、sleep(long)、sleep(long, int)
+ *
+ * 如果线程阻塞在 LockSupport.park(Object obj) 方法，也叫挂起，这个时候的中断也会导致线程唤醒，但是唤醒后不会重置中断状态，所以唤醒后去检测中断状态将是 true。
+ */
 public
 class Thread implements Runnable {
     /* Make sure registerNatives is the first thing <clinit> does. */
@@ -1017,6 +1025,7 @@ class Thread implements Runnable {
      * @see #isInterrupted()
      * @revised 6.0
      */
+    // 注意：这个方法返回中断状态的同时，会将此线程的中断状态重置为 false
     public static boolean interrupted() {
         return currentThread().isInterrupted(true);
     }
@@ -1034,6 +1043,7 @@ class Thread implements Runnable {
      * @see     #interrupted()
      * @revised 6.0
      */
+    // 检测线程中断状态
     public boolean isInterrupted() {
         return isInterrupted(false);
     }
