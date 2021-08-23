@@ -34,7 +34,6 @@
 #include "logging/log.hpp"
 #include "logging/logStream.hpp"
 #include "memory/allocation.inline.hpp"
-#include "memory/filemap.hpp"
 #include "oops/oop.inline.hpp"
 #include "os_bsd.inline.hpp"
 #include "os_posix.inline.hpp"
@@ -128,7 +127,7 @@ static jlong initial_time_count=0;
 
 static int clock_tics_per_sec = 100;
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && defined(__x86_64__)
 static const int processor_id_unassigned = -1;
 static const int processor_id_assigning = -2;
 static const int processor_id_map_size = 256;
@@ -238,7 +237,7 @@ void os::Bsd::initialize_system_info() {
     set_processor_count(1);   // fallback
   }
 
-#ifdef __APPLE__
+#if defined(__APPLE__) && defined(__x86_64__)
   // initialize processor id map
   for (int i = 0; i < processor_id_map_size; i++) {
     processor_id_map[i] = processor_id_unassigned;
@@ -453,7 +452,9 @@ void os::init_system_properties_values() {
       }
     }
     Arguments::set_java_home(buf);
-    set_boot_path('/', ':');
+    if (!set_boot_path('/', ':')) {
+        vm_exit_during_initialization("Failed setting boot class path.", NULL);
+    }
   }
 
   // Where to look for native libraries.
@@ -553,9 +554,6 @@ static void *thread_native_entry(Thread *thread) {
 
   osthread->set_thread_id(os::Bsd::gettid());
 
-  log_info(os, thread)("Thread is alive (tid: " UINTX_FORMAT ", pthread id: " UINTX_FORMAT ").",
-    os::current_thread_id(), (uintx) pthread_self());
-
 #ifdef __APPLE__
   // Store unique OS X thread id used by SA
   osthread->set_unique_thread_id();
@@ -587,6 +585,9 @@ static void *thread_native_entry(Thread *thread) {
       sync->wait_without_safepoint_check();
     }
   }
+
+  log_info(os, thread)("Thread is alive (tid: " UINTX_FORMAT ", pthread id: " UINTX_FORMAT ").",
+    os::current_thread_id(), (uintx) pthread_self());
 
   // call one more level start routine
   thread->call_run();
@@ -632,16 +633,22 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
   ThreadState state;
 
   {
+
+    ResourceMark rm;
     pthread_t tid;
-    int ret = pthread_create(&tid, &attr, (void* (*)(void*)) thread_native_entry, thread);
+    int ret = 0;
+    int limit = 3;
+    do {
+      ret = pthread_create(&tid, &attr, (void* (*)(void*)) thread_native_entry, thread);
+    } while (ret == EAGAIN && limit-- > 0);
 
     char buf[64];
     if (ret == 0) {
-      log_info(os, thread)("Thread started (pthread id: " UINTX_FORMAT ", attributes: %s). ",
-        (uintx) tid, os::Posix::describe_pthread_attr(buf, sizeof(buf), &attr));
+      log_info(os, thread)("Thread \"%s\" started (pthread id: " UINTX_FORMAT ", attributes: %s). ",
+                           thread->name(), (uintx) tid, os::Posix::describe_pthread_attr(buf, sizeof(buf), &attr));
     } else {
-      log_warning(os, thread)("Failed to start thread - pthread_create failed (%s) for attributes: %s.",
-        os::errno_name(ret), os::Posix::describe_pthread_attr(buf, sizeof(buf), &attr));
+      log_warning(os, thread)("Failed to start thread \"%s\" - pthread_create failed (%s) for attributes: %s.",
+                              thread->name(), os::errno_name(ret), os::Posix::describe_pthread_attr(buf, sizeof(buf), &attr));
       // Log some OS information which might explain why creating the thread failed.
       log_info(os, thread)("Number of threads approx. running in the VM: %d", Threads::number_of_threads());
       LogStream st(Log(os, thread)::info());
@@ -1777,7 +1784,7 @@ void os::large_page_init() {
 }
 
 
-char* os::pd_reserve_memory_special(size_t bytes, size_t alignment, char* req_addr, bool exec) {
+char* os::pd_reserve_memory_special(size_t bytes, size_t alignment, size_t page_size, char* req_addr, bool exec) {
   fatal("os::reserve_memory_special should not be called on BSD.");
   return NULL;
 }
@@ -2114,8 +2121,8 @@ int os::active_processor_count() {
   return _processor_count;
 }
 
-#if defined(__APPLE__) && defined(__x86_64__)
 uint os::processor_id() {
+#if defined(__APPLE__) && defined(__x86_64__)
   // Get the initial APIC id and return the associated processor id. The initial APIC
   // id is limited to 8-bits, which means we can have at most 256 unique APIC ids. If
   // the system has more processors (or the initial APIC ids are discontiguous) the
@@ -2146,8 +2153,13 @@ uint os::processor_id() {
   assert(processor_id >= 0 && processor_id < os::processor_count(), "invalid processor id");
 
   return (uint)processor_id;
-}
+#else // defined(__APPLE__) && defined(__x86_64__)
+  // Return 0 until we find a good way to get the current processor id on
+  // the platform. Returning 0 is safe, since there is always at least one
+  // processor, but might not be optimal for performance in some cases.
+  return 0;
 #endif
+}
 
 void os::set_native_thread_name(const char *name) {
 #if defined(__APPLE__) && MAC_OS_X_VERSION_MIN_REQUIRED > MAC_OS_X_VERSION_10_5
@@ -2159,11 +2171,6 @@ void os::set_native_thread_name(const char *name) {
     pthread_setname_np(buf);
   }
 #endif
-}
-
-bool os::bind_to_processor(uint processor_id) {
-  // Not yet implemented.
-  return false;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -2217,7 +2224,7 @@ bool os::find(address addr, outputStream* st) {
 // on, e.g., Win32.
 void os::os_exception_wrapper(java_call_t f, JavaValue* value,
                               const methodHandle& method, JavaCallArguments* args,
-                              Thread* thread) {
+                              JavaThread* thread) {
   f(value, method, args, thread);
 }
 
@@ -2351,9 +2358,7 @@ int os::open(const char *path, int oflag, int mode) {
 // create binary file, rewriting existing file if required
 int os::create_binary_file(const char* path, bool rewrite_existing) {
   int oflags = O_WRONLY | O_CREAT;
-  if (!rewrite_existing) {
-    oflags |= O_EXCL;
-  }
+  oflags |= rewrite_existing ? O_TRUNC : O_EXCL;
   return ::open(path, oflags, S_IREAD | S_IWRITE);
 }
 

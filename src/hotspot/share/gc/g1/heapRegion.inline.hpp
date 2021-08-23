@@ -25,11 +25,12 @@
 #ifndef SHARE_GC_G1_HEAPREGION_INLINE_HPP
 #define SHARE_GC_G1_HEAPREGION_INLINE_HPP
 
+#include "gc/g1/heapRegion.hpp"
+
 #include "gc/g1/g1BlockOffsetTable.inline.hpp"
 #include "gc/g1/g1CollectedHeap.inline.hpp"
 #include "gc/g1/g1ConcurrentMarkBitMap.inline.hpp"
 #include "gc/g1/g1Predictions.hpp"
-#include "gc/g1/heapRegion.hpp"
 #include "oops/oop.inline.hpp"
 #include "runtime/atomic.hpp"
 #include "runtime/prefetch.inline.hpp"
@@ -177,9 +178,7 @@ inline bool HeapRegion::is_obj_dead(const oop obj, const G1CMBitMap* const prev_
 }
 
 inline size_t HeapRegion::block_size(const HeapWord *addr) const {
-  if (addr == top()) {
-    return pointer_delta(end(), addr);
-  }
+  assert(addr < top(), "precondition");
 
   if (block_is_obj(addr)) {
     return cast_to_oop(addr)->size();
@@ -205,8 +204,8 @@ inline void HeapRegion::reset_compacted_after_full_gc() {
   reset_after_full_gc_common();
 }
 
-inline void HeapRegion::reset_not_compacted_after_full_gc() {
-  assert(!is_free(), "should not have compacted free region");
+inline void HeapRegion::reset_skip_compacting_after_full_gc() {
+  assert(!is_free(), "must be");
 
   assert(compaction_top() == bottom(),
          "region %u compaction_top " PTR_FORMAT " must not be different from bottom " PTR_FORMAT,
