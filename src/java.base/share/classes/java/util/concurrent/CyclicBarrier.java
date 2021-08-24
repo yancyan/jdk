@@ -136,6 +136,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * @author Doug Lea
  * @since 1.5
  */
+// ReentrantLock 和 Condition 的组合
 public class CyclicBarrier {
     /**
      * Each use of the barrier is represented as a generation instance.
@@ -156,12 +157,16 @@ public class CyclicBarrier {
     /** The lock for guarding barrier entry */
     private final ReentrantLock lock = new ReentrantLock();
     /** Condition to wait on until tripped */
+    // 条件
     private final Condition trip = lock.newCondition();
     /** The number of parties */
+    // 参与的线程数
     private final int parties;
     /** The command to run when tripped */
+    // 越过栅栏之前要执行的操作
     private final Runnable barrierCommand;
     /** The current generation */
+    // 当前所处的“代”
     private Generation generation = new Generation();
 
     /**
@@ -169,12 +174,15 @@ public class CyclicBarrier {
      * on each generation.  It is reset to parties on each new
      * generation or when broken.
      */
+    // 还没有到栅栏的线程数，这个值初始为 parties，然后递减
     private int count;
 
     /**
      * Updates state on barrier trip and wakes up everyone.
      * Called only while holding lock.
      */
+    // 开启新的一代，当最后一个线程到达栅栏上的时候，调用这个方法来唤醒其他线程，同时初始化“下一代”
+    // 类似于重新实例化一个 CyclicBarrier 实例
     private void nextGeneration() {
         // signal completion of last generation
         trip.signalAll();
@@ -200,6 +208,7 @@ public class CyclicBarrier {
         throws InterruptedException, BrokenBarrierException,
                TimeoutException {
         final ReentrantLock lock = this.lock;
+        // 先获取锁，才能使用条件队列，this.trip
         lock.lock();
         try {
             final Generation g = generation;
@@ -213,22 +222,27 @@ public class CyclicBarrier {
             }
 
             int index = --count;
+            // 等于 0，说明所有的线程都到栅栏上了，准备通过
             if (index == 0) {  // tripped
                 boolean ranAction = false;
                 try {
                     final Runnable command = barrierCommand;
                     if (command != null)
                         command.run();
+                    // 如果 ranAction 为 true，说明执行 command.run() 的时候，没有发生异常退出的情况
                     ranAction = true;
+                    // 唤醒等待的线程，然后开启新的一代
                     nextGeneration();
                     return 0;
                 } finally {
                     if (!ranAction)
+                        // 进到这里，说明执行指定操作的时候，发生了异常，那么需要打破栅栏
+                        // 之前我们说了，打破栅栏意味着唤醒所有等待的线程，设置 broken 为 true，重置 count 为 parties
                         breakBarrier();
                 }
             }
-
             // loop until tripped, broken, interrupted, or timed out
+           // 下面的操作是给那些不是最后一个到达栅栏的线程执行的
             for (;;) {
                 try {
                     if (!timed)

@@ -746,8 +746,10 @@ public abstract class AbstractQueuedSynchronizer
                 if (ws == Node.SIGNAL) {
                     if (!h.compareAndSetWaitStatus(Node.SIGNAL, 0))
                         continue;            // loop to recheck cases
+                    // 唤醒头节点的后继节点
                     unparkSuccessor(h);
                 }
+                // 这个 CAS 失败的场景是：执行到这里的时候，刚好有一个节点入队，入队会将这个 ws 设置为 -1
                 else if (ws == 0 &&
                          !h.compareAndSetWaitStatus(0, Node.PROPAGATE))
                     continue;                // loop on failed CAS
@@ -1059,6 +1061,7 @@ public abstract class AbstractQueuedSynchronizer
      */
     private void doAcquireSharedInterruptibly(int arg)
         throws InterruptedException {
+        // 入队
         final Node node = addWaiter(Node.SHARED);
         try {
             for (;;) {
@@ -1382,11 +1385,13 @@ public abstract class AbstractQueuedSynchronizer
      * you like.
      * @throws InterruptedException if the current thread is interrupted
      */
+    // tryAcquireShared(arg)  return (getState() == 0) ? 1 : -1;
     public final void acquireSharedInterruptibly(int arg)
             throws InterruptedException {
         if (Thread.interrupted())
             throw new InterruptedException();
         if (tryAcquireShared(arg) < 0)
+            // state != 0
             doAcquireSharedInterruptibly(arg);
     }
 
@@ -1425,6 +1430,7 @@ public abstract class AbstractQueuedSynchronizer
      */
     public final boolean releaseShared(int arg) {
         if (tryReleaseShared(arg)) {
+            // tryReleaseShared(arg) 释放到0，去唤醒await 线程
             doReleaseShared();
             return true;
         }
